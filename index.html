@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protótipo de Captura de Áudio</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        #startButton {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        #startButton:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #volumeMeterContainer {
+            width: 300px;
+            height: 30px;
+            border: 1px solid #ccc;
+            background-color: #fff;
+            border-radius: 5px;
+            overflow: hidden; /* Para conter a barra de volume */
+        }
+        #volumeBar {
+            width: 0%; /* Começa vazio */
+            height: 100%;
+            background-color: #4CAF50;
+            transition: width 0.1s ease-out; /* Transição suave */
+        }
+        #statusMessage {
+            margin-top: 15px;
+            font-size: 14px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <h1>Captura de Áudio Web API</h1>
+    <button id="startButton">Iniciar Captura de Áudio</button>
+    <div id="volumeMeterContainer">
+        <div id="volumeBar"></div>
+    </div>
+    <p id="statusMessage">Clique em "Iniciar Captura" para começar.</p>
+
+    <script src="audioCapture.js"></script>
+</body>
+</html>
