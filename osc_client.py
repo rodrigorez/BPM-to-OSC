@@ -36,12 +36,20 @@ class OSCclient():
         self.__port = port
         self.__osc_client = SimpleUDPClient(self.ip, self.port)
 
+import socket # Required for socket.error
+
     def send_osc(self, osc_address: str, value, map_to_resolume=False) -> None:
-        if map_to_resolume:
-            if value > 20 and value < 500:
-                self.__osc_client.send_message(osc_address, float(value - 20) / float(480))
-        else:
-            self.__osc_client.send_message(osc_address, value)
+        try:
+            if map_to_resolume:
+                if value > 20 and value < 500:
+                    self.__osc_client.send_message(osc_address, float(value - 20) / float(480))
+            else:
+                self.__osc_client.send_message(osc_address, value)
+        except (OSError, socket.error) as e:
+            print(f"ERRO em OSCclient: Não foi possível enviar mensagem OSC para {self.ip}:{self.port} no endereço {osc_address}. Erro: {e}")
+        except Exception as e: # Catch any other potential exceptions
+            print(f"ERRO inesperado em OSCclient ao enviar mensagem para {self.ip}:{self.port} no endereço {osc_address}. Erro: {e}")
+
 
     def __del__(self):
         del self.__osc_client

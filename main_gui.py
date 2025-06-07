@@ -17,7 +17,7 @@ from pathlib import Path
 from subprocess import call
 from platform import system
 from time import time
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 
 # local
 from sevensegment import SevenSegmentDisp
@@ -82,6 +82,7 @@ class Main_Frame(wx.Frame):
         self.running = False
         self.retrys = 3
         self.led_counter = 3
+        self.bpm_lock = Lock() # Lock for send_bpm and beat_divider
 
         self.Read_LastSession_ini()
         self.InitUI()
@@ -155,17 +156,6 @@ class Main_Frame(wx.Frame):
         
         #self.ip_stuff_sizer.AddStretchSpacer()
 
-        """# Textbox OSC Adress
-        self.osc_adress_box = wx.TextCtrl(panel, value=self.config['OSC']['BPM_ADRESS'])
-        self.ip_stuff_sizer.Add(self.osc_adress_box, 0, wx.LEFT | wx.RIGHT | wx.ALIGN_CENTER, border=5)
-        # self.ip_stuff_sizer.AddStretchSpacer()
-
-        # Send Value Selection
-        self.send_format = wx.Choice(panel, choices=["Resolume BPM", "Actual BPM", "True / False"])
-        print(self.config['OSC']['BPM_SEND_FORMAT'])
-        self.send_format.SetSelection(int(self.config['OSC']['BPM_SEND_FORMAT']))
-        self.ip_stuff_sizer.Add(self.send_format, 0, wx.LEFT | wx.ALIGN_CENTER, border=5)"""
-
         # Text Connectionstatus
         self.text_connection = wx.StaticText(panel, label="", style=wx.EXPAND | wx.ALIGN_RIGHT | wx.ALIGN_BOTTOM)
         self.text_connection.SetFont(wx.Font(12, family=wx.DEFAULT, style=wx.NORMAL, weight=wx.BOLD))
@@ -205,11 +195,9 @@ class Main_Frame(wx.Frame):
 
         sizer.Add(audiosizer, pos=(2, 0), span=(1, 4), flag=wx.EXPAND | wx.LEFT | wx.RIGHT, border=10)
 
-        # Disabled reload button as pyaudio needs a complete restart to reload devices
-        """ # Button Reload devices
-        self.button_reload = wx.Button(panel, wx.ID_ANY, label="Reload")
-        sizer.Add(self.button_reload, pos=(3, 3), flag=wx.TOP | wx.RIGHT, border=10)
-        self.Bind(wx.EVT_BUTTON, self.on_button_reload, self.button_reload)"""
+        # Comentário: O botão Reload devices foi desabilitado pois o PyAudio pode precisar
+        # de um reinício completo da aplicação para recarregar os dispositivos de áudio corretamente.
+        # O código original do botão foi removido.
 
 # SEPARATOR
         line1 = wx.StaticLine(panel)
@@ -372,43 +360,72 @@ class Main_Frame(wx.Frame):
         sizer.Fit(self)
 
     def on_button_plus_one(self, event):
-        self.on_button_halftime(None, reset=True)
+        self.on_button_halftime(None, reset=True) # Modifies beat_divider
         self.next_led()
-        if self.sync:
+        should_switch_sync = False
+        with self.bpm_lock:
+            if self.sync:
+                should_switch_sync = True # Decide to switch sync, but do it outside lock
+
+            current_send_bpm = self.send_bpm
+            if current_send_bpm < 499:
+                self.send_bpm = current_send_bpm + 1
+                self.update_bpm_display(self.send_bpm, send_to="send")
+
+        if should_switch_sync:
             self.switch_sync(False)
-        if self.send_bpm < 499:
-            self.send_bpm += 1
-            self.update_bpm_display(self.send_bpm, send_to="send")
 
     def on_button_minus_one(self, event):
-        self.on_button_halftime(None, reset=True)
-        if self.sync:
+        self.on_button_halftime(None, reset=True) # Modifies beat_divider
+        should_switch_sync = False
+        with self.bpm_lock:
+            if self.sync:
+                should_switch_sync = True
+
+            current_send_bpm = self.send_bpm
+            if current_send_bpm > 20:
+                self.send_bpm = current_send_bpm - 1
+                self.update_bpm_display(self.send_bpm, send_to="send")
+
+        if should_switch_sync:
             self.switch_sync(False)
-        if self.send_bpm > 20:
-            self.send_bpm -= 1
-            self.update_bpm_display(self.send_bpm, send_to="send")
 
     def on_button_double(self, event):
-        self.on_button_halftime(None, reset=True)
-        if self.sync:
+        self.on_button_halftime(None, reset=True) # Modifies beat_divider
+        should_switch_sync = False
+        with self.bpm_lock:
+            if self.sync:
+                should_switch_sync = True
+
+            current_send_bpm = self.send_bpm
+            if current_send_bpm * 2 <= 500:
+                self.send_bpm = current_send_bpm * 2
+                self.update_bpm_display(self.send_bpm, send_to="send")
+
+        if should_switch_sync:
             self.switch_sync(False)
-        if self.send_bpm*2 <= 500:
-            self.send_bpm *= 2
-            self.update_bpm_display(self.send_bpm, send_to="send")
 
     def on_button_half(self, event):
-        self.on_button_halftime(None, reset=True)
-        if self.sync:
+        self.on_button_halftime(None, reset=True) # Modifies beat_divider
+        should_switch_sync = False
+        with self.bpm_lock:
+            if self.sync:
+                should_switch_sync = True
+
+            current_send_bpm = self.send_bpm
+            if current_send_bpm / 2 >= 20:
+                self.send_bpm = round(current_send_bpm / 2)
+                self.update_bpm_display(self.send_bpm, send_to="send")
+
+        if should_switch_sync:
             self.switch_sync(False)
-        if self.send_bpm/2 >= 20:
-            self.send_bpm = round(self.send_bpm/2)
-            self.update_bpm_display(self.send_bpm, send_to="send")
 
     def on_button_halftime(self, event, reset=False):
         if reset:
             self.button_halftime.SetValue(False)
         
-        self.beat_divider = 2 if self.button_halftime.GetValue() else 1
+        with self.bpm_lock:
+            self.beat_divider = 2 if self.button_halftime.GetValue() else 1
 
 
     def on_button_reload(self, event):
@@ -457,12 +474,17 @@ class Main_Frame(wx.Frame):
             else:
                 # disable sync if it was enabled
                 # this also starts the osc sending thread
-                if self.sync:
-                    self.switch_sync(False)
+                should_switch_sync = False
+                with self.bpm_lock:
+                    if self.sync:
+                        should_switch_sync = True
 
-                # Calculate the BPM, set variable for thread and display it
-                self.send_bpm = round(60 / (sum([x[1] for x in self.last_tap[1:]]) / len(self.last_tap[1:])))
-                self.update_bpm_display(self.send_bpm, send_to="send")
+                    # Calculate the BPM, set variable for thread and display it
+                    self.send_bpm = round(60 / (sum([x[1] for x in self.last_tap[1:]]) / len(self.last_tap[1:])))
+                    self.update_bpm_display(self.send_bpm, send_to="send")
+
+                if should_switch_sync:
+                    self.switch_sync(False)
 
         elif len(self.last_tap) == 1:
             self.last_tap.append((time(), time() - self.last_tap[-1][0]))
@@ -702,27 +724,77 @@ class Main_Frame(wx.Frame):
                 comp = (time.time() - prev) - ((60/self.send_bpm)*8)
                 beat_counter = 0"""
         # trigger at least once set_osc
-        prev_bpm = self.send_bpm
-        self.send_bpm//=self.beat_divider
-        #self.osc_client.send_osc(self.config['OSC']['BPM_ADRESS'], self.send_bpm, map_to_resolume=True)
+        # Initialize prev_bpm with a value that will trigger an update if send_bpm is valid
+        prev_bpm = -1
+        current_send_bpm = 120 # Default to a safe BPM
+        current_beat_divider = 1
+
+        with self.bpm_lock:
+            current_send_bpm = self.send_bpm
+            current_beat_divider = self.beat_divider
+            # Apply beat_divider to the initial current_send_bpm for the thread's logic
+            # This means the thread operates on the divided BPM for its internal timing
+            # and sends this divided value.
+            # Note: This modification of current_send_bpm is local to the thread's start.
+            # If beat_divider changes WHILE this thread is running, this thread
+            # will only pick up the new beat_divider in its next full iteration's lock acquisition.
+            # The send_bpm itself (the undivided one) is updated by other methods.
+            # Let's simplify: the thread sends self.send_bpm / self.beat_divider.
+            # The wait interval should be based on this effective BPM.
+
+            # prev_bpm should be compared against the potentially divided BPM.
+            # Let's fetch send_bpm and beat_divider within the loop for more responsiveness to changes.
+            pass # Initial values will be fetched inside the loop
 
         # send bpm only on change
         while True:
-            prev_time = time()  # time compensation
-            self.next_led(thread=False)
-            #self.osc_client.send_osc("/composition/tempocontroller/tempo", self.send_bpm, map_to_resolume=True)
+            prev_time = time()
+            self.next_led(thread=False) # GUI update, should be safe
 
-            if prev_bpm != self.send_bpm:
-                self.osc_client.send_osc(self.config['OSC']['BPM_ADRESS'], self.send_bpm, map_to_resolume=True)
-                self.update_bpm_display(self.send_bpm, send_to="send", Blink=True) # send bpm to send display
-                prev_bpm = self.send_bpm
-                
-            # efficient c based busy wating with instant return option
-            if self.bpm_thread_wait_and_terminate.wait(60/self.send_bpm - (time()-prev_time)):
-                if self.resync:
+            with self.bpm_lock:
+                # Fetch the most current send_bpm and beat_divider
+                # These are the "master" values
+                master_send_bpm = self.send_bpm
+                master_beat_divider = self.beat_divider
+
+            # Calculate the effective BPM this thread should work with for this iteration
+            # This is the value that will be sent and used for timing
+            effective_send_bpm = master_send_bpm // master_beat_divider
+
+            # Send OSC if the effective_send_bpm has changed since last send
+            # or if it's the first run (prev_bpm = -1)
+            if prev_bpm != effective_send_bpm:
+                if self.osc_client: # Check if osc_client is initialized
+                    self.osc_client.send_osc(self.config['OSC']['BPM_ADRESS'], effective_send_bpm, map_to_resolume=True)
+                self.update_bpm_display(effective_send_bpm, send_to="send", Blink=True)
+                prev_bpm = effective_send_bpm # Update prev_bpm to the new effective_send_bpm
+
+            # Calculate wait time based on the effective_send_bpm used for OSC
+            wait_time = (60.0 / effective_send_bpm) if effective_send_bpm > 0 else 1.0
+
+            # Adjust wait time for processing time
+            elapsed_time = time() - prev_time
+            actual_wait_time = wait_time - elapsed_time
+            if actual_wait_time < 0:
+                actual_wait_time = 0 # Avoid negative wait time
+
+            if self.bpm_thread_wait_and_terminate.wait(actual_wait_time):
+                if self.resync: # If resync is triggered, continue to potentially recalculate wait time
                     continue
-                else:
+                else: # If event is set for termination (not resync)
                     return
+
+    def process_detected_beat(self, detected_bpm_value: int):
+        """
+        Called by BeatDetector's _GUI_callback to update BPM from audio analysis.
+        This method ensures that writes to shared BPM variables are thread-safe.
+        """
+        with self.bpm_lock:
+            if self.sync: # Only update send_bpm if sync is active
+                self.send_bpm = detected_bpm_value
+        # Note: The _GUI_callback in beatfinder.py will still handle
+        # calling self.parent.update_bpm_display and self.client.send_osc
+        # based on its own logic and the possibly updated self.parent.send_bpm.
 
     def close(self, event):  # save settings to ini and close down
         """Ask User if event can be vetoed (No force close event).

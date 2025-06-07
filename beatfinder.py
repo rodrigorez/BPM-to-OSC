@@ -37,32 +37,41 @@ class BeatDetector:
         self.level_reset = None  # Timer for resetting level
         self.level_queue = deque(maxlen=20)  # RMS Level queue
         self.p: pyaudio.PyAudio = pyaudio.PyAudio()
-        self.tempo = tempo("default", self.buf_size * 2, self.buf_size, self.SAMPLERATE)            
+        self.tempo = tempo("default", self.buf_size * 2, self.buf_size, self.SAMPLERATE)
+        self.stream = None # Initialize stream attribute
 
-        # Callback to GUI
-        if self.parent is not None:
-            self.stream: pyaudio.Stream = self.p.open(
-                format=pyaudio.paFloat32,
-                channels=1,
-                rate=self.SAMPLERATE,
-                input=True,
-                input_device_index=self.audio_device_index,
-                frames_per_buffer=self.buf_size,
-                stream_callback=self._GUI_callback
-            )
+        try:
+            # Callback to GUI
+            if self.parent is not None:
+                self.stream: pyaudio.Stream = self.p.open(
+                    format=pyaudio.paFloat32,
+                    channels=1,
+                    rate=self.SAMPLERATE,
+                    input=True,
+                    input_device_index=self.audio_device_index,
+                    frames_per_buffer=self.buf_size,
+                    stream_callback=self._GUI_callback
+                )
 
-        # Callback to Console (standalone)
-        else:
-            self.stream: pyaudio.Stream = self.p.open(
-                format=pyaudio.paFloat32,
-                channels=1,
-                rate=self.SAMPLERATE,
-                input=True,
-                frames_per_buffer=self.buf_size,
-                stream_callback=self._STANDALONE_callback
-            )
-            # init output class
-            self.spinner = BeatPrinter()
+            # Callback to Console (standalone)
+            else:
+                self.stream: pyaudio.Stream = self.p.open(
+                    format=pyaudio.paFloat32,
+                    channels=1,
+                    rate=self.SAMPLERATE,
+                    input=True,
+                    frames_per_buffer=self.buf_size,
+                    stream_callback=self._STANDALONE_callback
+                )
+                # init output class
+                self.spinner = BeatPrinter()
+        except Exception as e:
+            print(f"ERRO em BeatDetector: Não foi possível abrir o stream de áudio. Dispositivo: {self.audio_device_index}. Erro: {e}")
+            self.stream = None # Ensure stream is None if opening failed
+            # If running with GUI, inform the parent as well
+            if self.parent and hasattr(self.parent, 'show_error_message'):
+                self.parent.show_error_message(f"Falha ao abrir stream de áudio no dispositivo {self.audio_device_index}.\nVerifique as configurações de áudio.\nErro: {e}")
+
 
 
     def _GUI_callback(self, in_data, frame_count, time_info, status):
@@ -100,24 +109,34 @@ class BeatDetector:
                 if self.parent.sync:
 
                     # SEND to osc and BOTH display if sync is on
-                    
-                    self.parent.send_bpm = self.bpm
+                    # Inform Main_Frame about the detected BPM so it can update self.send_bpm thread-safely
+                    self.parent.process_detected_beat(self.bpm)
                                         
                     self.parent.update_bpm_display(self.bpm, send_to="live", Blink=True)
                     
-                    if self.parent.beat_divider == 1:
-                        self.client.send_osc(self.parent.config['OSC']['BPM_ADRESS'], self.bpm, map_to_resolume=True)
-                        
-                        self.parent.update_bpm_display(self.bpm, send_to="send", Blink=True) # send bpm to send display
-                        
-                        self.parent.next_led()
+                    # Read beat_divider from parent thread-safely for consistent sending
+                    current_beat_divider = 1 # Default value
+                    # Accessing parent's lock directly is not ideal.
+                    # A better way would be for parent to expose beat_divider via a thread-safe getter
+                    # or for process_detected_beat to also handle the OSC sending logic based on sync.
+                    # For now, we assume beat_divider read from parent is "recent enough"
+                    # or that its changes are infrequent compared to beat detection.
+                    # This is a potential area for further refinement if strict sync is needed for beat_divider.
+                    with self.parent.bpm_lock: # Acquire lock to read beat_divider
+                        current_beat_divider = self.parent.beat_divider
 
+                    if current_beat_divider == 1:
+                        self.client.send_osc(self.parent.config['OSC']['BPM_ADRESS'], self.bpm, map_to_resolume=True)
+                        self.parent.update_bpm_display(self.bpm, send_to="send", Blink=True) # send bpm to send display
+                        self.parent.next_led()
                     
-                    elif (self.beat_counter + 1) % self.parent.beat_divider == 0:
-                        self.client.send_osc(self.parent.config['OSC']['BPM_ADRESS'], self.bpm // self.parent.beat_divider, map_to_resolume=True)
-                        
-                        self.parent.update_bpm_display(self.bpm // self.parent.beat_divider, send_to="send", Blink=True) # send bpm to send display
-                        
+                    elif (self.beat_counter + 1) % current_beat_divider == 0:
+                        # Use self.bpm directly as it's the raw detected value.
+                        # The parent.send_bpm is updated by process_detected_beat.
+                        # The division happens for sending purposes here.
+                        divided_bpm = self.bpm // current_beat_divider
+                        self.client.send_osc(self.parent.config['OSC']['BPM_ADRESS'], divided_bpm, map_to_resolume=True)
+                        self.parent.update_bpm_display(divided_bpm, send_to="send", Blink=True) # send bpm to send display
                         self.parent.next_led()
 
                         
@@ -152,22 +171,33 @@ class BeatDetector:
         """
         if self.level_reset is not None:
             self.level_reset.cancel()
-        self.stream.close()
-        self.p.terminate()
+        if self.stream:
+            self.stream.close()
+        if self.p: # PyAudio instance might not be fully initialized if error occurs early
+            self.p.terminate()
 
 if __name__ == "__main__":
     import os
     import time
+    # import signal # Required for signal.pause() on Unix-like systems
 
     client = osc_client.OSCclient("127.0.0.1", 7000)
-    bd = BeatDetector(client, verbose=True, buf_size=128)
-    try:
-        # Audio processing happens in separate thread, so put this thread to sleep
-        if os.name == 'nt':  # Windows is not able to pause the main thread :(
-            while True:
-                time.sleep(1)
-        else:
-            signal.pause()
-    except:
-        # print(sum(bd.timings)/len(bd.timings))
-        pass
+    bd = BeatDetector(client, audio_device_index=0, buf_size=128) # Assuming device index 0 for standalone testing
+    if bd.stream: # Only proceed if stream was successfully opened
+        try:
+            print("BeatDetector iniciado. Pressione Ctrl+C para sair.")
+            # Audio processing happens in separate thread, so put this thread to sleep
+            if os.name == 'nt':  # Windows is not able to pause the main thread :(
+                while True:
+                    time.sleep(1)
+            else:
+                # signal.pause() # This would require import signal
+                while True: # Using a simple loop for broader compatibility without new import
+                    time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nFechando BeatDetector...")
+        finally:
+            # print(sum(bd.timings)/len(bd.timings)) # timings attribute does not exist
+            del bd # Ensure __del__ is called
+    else:
+        print("BeatDetector não pôde ser iniciado devido a um erro no stream de áudio.")
